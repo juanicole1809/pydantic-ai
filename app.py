@@ -1272,6 +1272,41 @@ def get_response_with_memory(user_prompt):
             # Verificar si se utilizaron herramientas
             response_data = result.data
             
+            # Verificar si la respuesta contiene etiquetas de función o solo el nombre de la función
+            function_patterns = ["<function=", "search_web("]
+            contains_function = any(pattern in response_data for pattern in function_patterns)
+            
+            if contains_function:
+                # Si la respuesta es solo "search_web()" o similar, reemplazar con un mensaje de espera
+                if response_data.strip() in ["search_web()", "search_web"]:
+                    response_data = "Estoy buscando la información solicitada. Por favor espera un momento..."
+                    
+                    # Esperar a que se complete la búsqueda antes de devolver la respuesta
+                    # Esta parte es necesaria para asegurarse de que los resultados estén disponibles
+                    # Comprobar si hay herramientas utilizadas
+                    if "herramientas_usadas" in st.session_state and st.session_state.herramientas_usadas:
+                        # Si hay herramientas usadas, significa que la búsqueda se completó
+                        # Volver a ejecutar el agente con los mismos parámetros para obtener una respuesta completa
+                        try:
+                            tools_placeholder.markdown("🔄 Procesando los resultados de la búsqueda...")
+                            result = st.session_state.pydantic_agent.run_sync(
+                                f"Basándote en los resultados de búsqueda que acabas de obtener sobre '{user_prompt}', proporciona una respuesta informativa y completa.",
+                                message_history=st.session_state.pydantic_history
+                            )
+                            # Actualizar con la nueva respuesta
+                            response_data = result.data
+                        except Exception as retry_e:
+                            # Si falla el reintento, seguimos con la respuesta original
+                            response_data += f"\n\nNo pude procesar completamente los resultados de la búsqueda: {str(retry_e)}"
+                else:
+                    # Eliminar las etiquetas de función que están apareciendo en la UI
+                    response_data = response_data.replace("<function=", "").replace("</function>", "")
+                    # Si hay información JSON, intentamos limpiarla también
+                    import re
+                    response_data = re.sub(r'\{.*?\}', '', response_data)
+                    # Limpiar cualquier texto "search_web" suelto
+                    response_data = response_data.replace("search_web()", "").replace("search_web", "").strip()
+            
             # Verificar el registro de herramientas utilizadas
             if "herramientas_usadas" in st.session_state and st.session_state.herramientas_usadas:
                 # Construir un razonamiento con los resultados de Tavily
@@ -1285,15 +1320,21 @@ def get_response_with_memory(user_prompt):
                         if "ultima_busqueda" in st.session_state:
                             thinking_content += st.session_state["ultima_busqueda"]["resultados"]
                 
-                # Formatear la respuesta con el formato de pensamiento para que se muestre en la UI
-                # Verificar si la respuesta ya contiene etiquetas de función
-                if "<function=" in response_data:
-                    # Eliminar las etiquetas de función que están apareciendo en la UI
-                    response_data = response_data.replace("<function=", "").replace("</function>", "")
-                    # Si hay información JSON, intentamos limpiarla también
-                    import re
-                    response_data = re.sub(r'\{.*?\}', '', response_data)
+                # Si la respuesta está vacía o es solo el mensaje de espera, intentar generar una mejor respuesta
+                if not response_data or response_data == "Estoy buscando la información solicitada. Por favor espera un momento...":
+                    try:
+                        tools_placeholder.markdown("📝 Generando respuesta final basada en los resultados...")
+                        # Intento final para obtener una respuesta completa
+                        final_result = st.session_state.pydantic_agent.run_sync(
+                            f"Basándote en la siguiente información de búsqueda web sobre '{user_prompt}', proporciona una respuesta completa y bien estructurada: {thinking_content}",
+                            message_history=st.session_state.pydantic_history
+                        )
+                        response_data = final_result.data
+                    except Exception:
+                        # Si falla, usar una respuesta genérica
+                        response_data = "He encontrado algunos resultados relevantes. Por favor revisa la sección de 'Razonamiento' para ver la información en detalle."
                 
+                # Formatear la respuesta con el formato de pensamiento para que se muestre en la UI
                 response_data = f"<think>{thinking_content}</think>{response_data}"
             
             # Limpiar el placeholder de herramientas
