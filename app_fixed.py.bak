@@ -219,6 +219,7 @@ button[data-testid="baseButton-secondary"]:hover {
 </style>
 """, unsafe_allow_html=True)
 
+st.title("Asistente IA con Groq 🤖")
 
 # Inicializar las variables de la sesión
 if 'messages' not in st.session_state:
